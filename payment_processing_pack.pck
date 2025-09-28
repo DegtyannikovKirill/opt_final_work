@@ -4,6 +4,8 @@ create or replace package payment_processing_pack is
   -- Created : 04.07.2023 10:53:33
   -- Purpose :
 
+  c_limit_create_dtime constant integer := 7;
+
   procedure processing(p_bulk_size number);
 
 end payment_processing_pack;
@@ -16,8 +18,7 @@ create or replace package body payment_processing_pack is
     v_wallet_id        wallet.wallet_id%type;
     v_wallet_status_id wallet.status_id%type;
   begin
-    select /*+ index(w1 WALLET_CLIENT_FK) index(w2 WALLET_CLIENT_FK)*/
-           cl.is_active
+    select cl.is_active
           ,cl.is_blocked
           ,w.wallet_id
           ,w.status_id
@@ -46,11 +47,13 @@ create or replace package body payment_processing_pack is
     v_wallet_from_id wallet.wallet_id%type;
     v_wallet_to_id   wallet.wallet_id%type;
   begin
-    select p.payment_id
+    select /*+ INDEX(p payment_status_createDtime_payment_id) */ p.payment_id
       bulk collect
       into v_payment_ids
       from payment p
      where p.status = payment_api_pack.c_created
+       and p.create_dtime between current_date - c_limit_create_dtime
+                              and current_date
        and rownum <= p_bulk_size
        for update skip locked;
 
@@ -58,7 +61,7 @@ create or replace package body payment_processing_pack is
       return;
     end if;
 
-    for p in (select /*+ cardinality(pi 1000) leading(p pi)*/
+    for p in (select /*+ USE_NL(p)*/
                p.payment_id
               ,p.currency_id
               ,p.summa
@@ -66,7 +69,9 @@ create or replace package body payment_processing_pack is
               ,p.to_client_id
                 from table(v_payment_ids) pi
                 join payment p
-                  on p.payment_id = value(pi)) loop
+                  on p.payment_id = value(pi)
+               )
+    loop
       begin
         dbms_application_info.set_action(action_name => 'process payment_id: ' || p.payment_id);
 
