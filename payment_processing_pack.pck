@@ -6,6 +6,7 @@ create or replace package payment_processing_pack is
 
   procedure processing(p_bulk_size number);
 
+  c_limit_create_dtime constant integer := 7;
 end payment_processing_pack;
 /
 create or replace package body payment_processing_pack is
@@ -16,8 +17,7 @@ create or replace package body payment_processing_pack is
     v_wallet_id        wallet.wallet_id%type;
     v_wallet_status_id wallet.status_id%type;
   begin
-    select /*+ index(w1 WALLET_CLIENT_FK) index(w2 WALLET_CLIENT_FK)*/
-           cl.is_active
+    select cl.is_active
           ,cl.is_blocked
           ,w.wallet_id
           ,w.status_id
@@ -51,6 +51,7 @@ create or replace package body payment_processing_pack is
       into v_payment_ids
       from payment p
      where p.status = payment_api_pack.c_created
+       and p.create_dtime >= current_date - c_limit_create_dtime
        and rownum <= p_bulk_size
        for update skip locked;
 
@@ -58,7 +59,7 @@ create or replace package body payment_processing_pack is
       return;
     end if;
 
-    for p in (select /*+ cardinality(pi 1000) leading(p pi)*/
+    for p in (select /*+ DYNAMIC_SAMPLING(pi, 2)*/
                p.payment_id
               ,p.currency_id
               ,p.summa
